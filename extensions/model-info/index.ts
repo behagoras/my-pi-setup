@@ -40,28 +40,34 @@ function getModelRates(modelId: string) {
 function getSessionCost(ctx: ExtensionContext) {
   let cost = 0;
 
-  for (const entry of ctx.sessionManager.getBranch()) {
-    if (entry.type === "message" && entry.message.role === "assistant") {
-      const usage = entry.message.usage;
-      if (!usage) continue;
+  try {
+    const branch = ctx.sessionManager.getBranch();
+    for (const entry of branch) {
+      if (entry.type === "message" && entry.message && entry.message.role === "assistant") {
+        const usage = entry.message.usage;
+        if (!usage) continue;
 
-      if (usage.cost && usage.cost.total > 0) {
-        cost += usage.cost.total;
-      } else {
-        // Fallback: estimate cost based on model ID and token usage
-        const rates = getModelRates(entry.message.model || ctx.model?.id || "");
-        const inputTokens = usage.input || usage.inputTokens || 0;
-        const outputTokens = usage.output || usage.outputTokens || 0;
-        const cacheReadTokens = usage.cacheRead || usage.cacheReadTokens || 0;
-        const cacheWriteTokens = usage.cacheWrite || usage.cacheWriteTokens || 0;
+        if (usage.cost && typeof usage.cost.total === "number" && usage.cost.total > 0) {
+          cost += usage.cost.total;
+        } else {
+          // Fallback: estimate cost based on model ID and token usage
+          const modelId = entry.message.model || ctx.model?.id || "";
+          const rates = getModelRates(modelId);
+          const inputTokens = usage.input || usage.inputTokens || (usage.tokens ? usage.tokens.input : 0) || 0;
+          const outputTokens = usage.output || usage.outputTokens || (usage.tokens ? usage.tokens.output : 0) || 0;
+          const cacheReadTokens = usage.cacheRead || usage.cacheReadTokens || 0;
+          const cacheWriteTokens = usage.cacheWrite || usage.cacheWriteTokens || 0;
 
-        const inputCost = (inputTokens / 1_000_000) * rates.input;
-        const outputCost = (outputTokens / 1_000_000) * rates.output;
-        const cacheReadCost = (cacheReadTokens / 1_000_000) * (rates.cacheRead || 0);
-        const cacheWriteCost = (cacheWriteTokens / 1_000_000) * (rates.cacheWrite || 0);
-        cost += inputCost + outputCost + cacheReadCost + cacheWriteCost;
+          const inputCost = (inputTokens / 1_000_000) * rates.input;
+          const outputCost = (outputTokens / 1_000_000) * rates.output;
+          const cacheReadCost = (cacheReadTokens / 1_000_000) * (rates.cacheRead || 0);
+          const cacheWriteCost = (cacheWriteTokens / 1_000_000) * (rates.cacheWrite || 0);
+          cost += inputCost + outputCost + cacheReadCost + cacheWriteCost;
+        }
       }
     }
+  } catch {
+    // Ignore errors reading branch
   }
 
   return cost;
