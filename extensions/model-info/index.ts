@@ -11,12 +11,49 @@ import {
 const CHARS_PER_ESTIMATED_TOKEN = 4;
 const LIVE_UPDATE_INTERVAL_MS = 200;
 
+// Model rates per 1M tokens: { input, output, cacheRead, cacheWrite }
+const FALLBACK_RATES: Record<string, { input: number; output: number; cacheRead?: number; cacheWrite?: number }> = {
+  // Claude
+  "claude-3-5-sonnet": { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-3-7-sonnet": { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-3-5-haiku": { input: 0.8, output: 4.0, cacheRead: 0.08, cacheWrite: 1.0 },
+  "claude-3-opus": { input: 15.0, output: 75.0, cacheRead: 1.5, cacheWrite: 18.75 },
+  // OpenAI
+  "gpt-4o": { input: 2.5, output: 10.0 },
+  "gpt-4o-mini": { input: 0.15, output: 0.6 },
+  "o1": { input: 15.0, output: 60.0 },
+  "o3-mini": { input: 1.1, output: 4.4 },
+  // Gemini
+  "gemini-2.5-flash": { input: 0.075, output: 0.3 },
+  "gemini-2.5-pro": { input: 1.25, output: 5.0 },
+};
+
+function getModelRates(modelId: string) {
+  const normalized = modelId.toLowerCase();
+  for (const [key, rates] of Object.entries(FALLBACK_RATES)) {
+    if (normalized.includes(key)) return rates;
+  }
+  // Default fallback if unknown model: Sonnet-like pricing
+  return { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 };
+}
+
 function getSessionCost(ctx: ExtensionContext) {
   let cost = 0;
 
   for (const entry of ctx.sessionManager.getBranch()) {
     if (entry.type === "message" && entry.message.role === "assistant") {
-      cost += entry.message.usage.cost.total;
+      const usage = entry.message.usage;
+      if (usage.cost.total > 0) {
+        cost += usage.cost.total;
+      } else {
+        // Fallback: estimate cost based on model ID and token usage
+        const rates = getModelRates(entry.message.model || ctx.model?.id || "");
+        const inputCost = (usage.input / 1_000_000) * rates.input;
+        const outputCost = (usage.output / 1_000_000) * rates.output;
+        const cacheReadCost = ((usage.cacheRead || 0) / 1_000_000) * (rates.cacheRead || 0);
+        const cacheWriteCost = ((usage.cacheWrite || 0) / 1_000_000) * (rates.cacheWrite || 0);
+        cost += inputCost + outputCost + cacheReadCost + cacheWriteCost;
+      }
     }
   }
 
