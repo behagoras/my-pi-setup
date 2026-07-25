@@ -44,17 +44,16 @@ Y los ADRs enterprise en el vault: `personal/00 Capture/youtube-transcripts/PI/d
 | **OpenAI** | 🟡 **incógnita** (ADR-001 D2) | ¿`codex login` con la suscripción de ChatGPT sirve como harness en Pi? Si no → ¿vale una API key de pago por uso? **Es el pendiente #1.** |
 | Cursor | 🔴 bloqueado (free, sin service-account key) | Nada que hacer hasta que pague. Trigger documentado. |
 | Gemini | ⚫ fuera | Reabrir solo si aparece caso de volumen barato. |
-| Firecrawl | 🟡 extensión presente, inerte | ¿Se queda inerte o se **elimina** del fork? Free tier existe (~500 créditos/mes). |
+| Firecrawl | 🔴 **eliminado** | Eliminado del repositorio por completo para mantener el proyecto limpio. |
 | Research | 🟢 decidido | Verificar que `subagent_spawn({harness:"claude"})` tenga `WebSearch`. |
 
 ### 2. Qué eliminar del fork de Ben
 
-Heredado y probablemente no lo quiero. Cada uno es una decisión de "borrar o dejar":
-- `extensions/firecrawl-search/` — depende del punto anterior.
-- `extensions/summaries/` — ¿uso resúmenes de sesión?
-- `extensions/workflows/` — potente pero pesado; ¿lo uso de verdad?
+- `extensions/firecrawl-search/` — **eliminado**.
+- `extensions/summaries/` — **conservado**.
+- `extensions/workflows/` — **conservado**.
 - El `SETUP.md` de la raíz (upstream) **contradice** mi `docs/SETUP.md` → o se borra o se marca.
-- `.env.example` solo tiene `FIRECRAWL_API_KEY`.
+- `.env.example` solo tenía `FIRECRAWL_API_KEY`.
 - `assets/pi-setup.jpeg` es la screenshot de Ben.
 
 ### 3. Qué modificar

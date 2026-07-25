@@ -12,3 +12,18 @@ When working in svelte(kit):
 In general:
 
 - when asking questions, ask them one at a time
+
+## Model Routing & Effort Levels (Personal Setup)
+
+- Primary Provider: Claude via `/login` OAuth subscription (zero marginal token cost).
+- Main thread / default: `sonnet` (effort: `medium`).
+- Fast search / grep / summary: `sonnet` (effort: `minimal`).
+- Architecture / complex debugging / code review: `opus` (effort: `high`).
+- Research / Web Search: spawn subagent using `harness: "claude"` (uses Claude Code's native WebSearch).
+- Valid reasoning efforts: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
+- Subagent harness grammar:
+  - `pi` -> `"provider/model-id"` + reasoningEffort
+  - `claude` -> `"opus"` or `"sonnet"`
+  - `codex` -> OpenAI model ID
+  - Always be explicit about `model` and `reasoningEffort` when spawning subagents (max 4 running simultaneously).
+

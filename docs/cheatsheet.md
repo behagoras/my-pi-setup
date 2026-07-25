@@ -92,7 +92,6 @@ Budgets del backend claude: `off:0` `minimal:1024` `low:4096` `medium:10000` `hi
 | `copy-all` | `/copyall` — historial al clipboard |
 | `summaries` | Resúmenes de sesión |
 | `themes/` | `github-dark-default` |
-| `firecrawl-search` | Inerte sin `FIRECRAWL_API_KEY` (ADR-002) |
 
 ## Comandos de verificación
 
