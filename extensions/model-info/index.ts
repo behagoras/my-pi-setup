@@ -62,7 +62,13 @@ function getSessionCost(ctx: ExtensionContext) {
           const outputCost = (outputTokens / 1_000_000) * rates.output;
           const cacheReadCost = (cacheReadTokens / 1_000_000) * (rates.cacheRead || 0);
           const cacheWriteCost = (cacheWriteTokens / 1_000_000) * (rates.cacheWrite || 0);
-          cost += inputCost + outputCost + cacheReadCost + cacheWriteCost;
+          
+          let msgCost = inputCost + outputCost + cacheReadCost + cacheWriteCost;
+          // If message usage tokens are 0/empty, apply a minimal floor per assistant message turn ($0.001)
+          if (msgCost === 0) {
+            msgCost = 0.001;
+          }
+          cost += msgCost;
         }
       }
     }
