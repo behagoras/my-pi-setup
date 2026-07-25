@@ -43,15 +43,22 @@ function getSessionCost(ctx: ExtensionContext) {
   for (const entry of ctx.sessionManager.getBranch()) {
     if (entry.type === "message" && entry.message.role === "assistant") {
       const usage = entry.message.usage;
-      if (usage.cost.total > 0) {
+      if (!usage) continue;
+
+      if (usage.cost && usage.cost.total > 0) {
         cost += usage.cost.total;
       } else {
         // Fallback: estimate cost based on model ID and token usage
         const rates = getModelRates(entry.message.model || ctx.model?.id || "");
-        const inputCost = (usage.input / 1_000_000) * rates.input;
-        const outputCost = (usage.output / 1_000_000) * rates.output;
-        const cacheReadCost = ((usage.cacheRead || 0) / 1_000_000) * (rates.cacheRead || 0);
-        const cacheWriteCost = ((usage.cacheWrite || 0) / 1_000_000) * (rates.cacheWrite || 0);
+        const inputTokens = usage.input || usage.inputTokens || 0;
+        const outputTokens = usage.output || usage.outputTokens || 0;
+        const cacheReadTokens = usage.cacheRead || usage.cacheReadTokens || 0;
+        const cacheWriteTokens = usage.cacheWrite || usage.cacheWriteTokens || 0;
+
+        const inputCost = (inputTokens / 1_000_000) * rates.input;
+        const outputCost = (outputTokens / 1_000_000) * rates.output;
+        const cacheReadCost = (cacheReadTokens / 1_000_000) * (rates.cacheRead || 0);
+        const cacheWriteCost = (cacheWriteTokens / 1_000_000) * (rates.cacheWrite || 0);
         cost += inputCost + outputCost + cacheReadCost + cacheWriteCost;
       }
     }
