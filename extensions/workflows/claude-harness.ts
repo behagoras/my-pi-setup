@@ -127,6 +127,13 @@ export async function runClaudeAgent(
     });
   };
 
+  // Prepared before the listener is registered: serializing a pathological
+  // schema can throw, and nothing may leak a listener on the caller's signal.
+  const prompt = request.schema
+    ? withSchemaInstruction(request.prompt, request.schema)
+    : request.prompt;
+  const budget = thinkingBudget(request.thinkingLevel);
+
   // The SDK takes its own AbortController, so a workflow abort is forwarded.
   const abortController = new AbortController();
   const abort = () => abortController.abort();
@@ -134,11 +141,6 @@ export async function runClaudeAgent(
     if (request.signal.aborted) abort();
     else request.signal.addEventListener("abort", abort, { once: true });
   }
-
-  const prompt = request.schema
-    ? withSchemaInstruction(request.prompt, request.schema)
-    : request.prompt;
-  const budget = thinkingBudget(request.thinkingLevel);
 
   try {
     const stream = query({
