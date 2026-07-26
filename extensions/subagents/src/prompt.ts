@@ -18,7 +18,7 @@ export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
 /** Model-facing schema descriptions for subagent_spawn task and execution options. */
 export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
   prompt:
-    "Task prompt for the subagent. Must be self-contained: include all needed context, file paths, and what to report back.",
+    "Task prompt for the subagent. Must be self-contained: include all needed context, file paths, and what to report back. Give file paths as absolute paths — a relative path resolves against the subagent's working directory, not the repository you are discussing.",
   name: "Short human-readable name for this subagent, shown in listings and the UI",
   harness:
     'Harness to run the subagent on: "pi" (in-process pi session; inherits this environment), "claude" (Claude Code), or "codex" (Codex CLI). Choose deliberately per task.',

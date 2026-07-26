@@ -46,6 +46,7 @@ export const WORKFLOW_PROMPT_SNIPPET =
 export const WORKFLOW_PROMPT_GUIDELINES = [
   "Use workflow when a task needs several subagents with phase dependencies or dynamic fan-out; keep single small delegations in the main session.",
   "In workflow scripts, agent() never throws — always check `.ok` on its result before using `.output`/`.structured`.",
+  "Reference files in agent prompts by absolute path. Agents inherit the session's working directory, so a relative path resolves there, not in whatever repository you are discussing — an agent sent a path from another checkout will correctly report the file missing.",
 ];
 
 /** Marks and forwards a workflow script's agent() task as an isolated child-model prompt. */

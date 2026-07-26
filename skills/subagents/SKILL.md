@@ -7,6 +7,8 @@ description: invoke this skill when the user asks you to use subagents
 
 Each subagent is headless, has its own context window, cannot see the parent conversation, cannot ask the user, and cannot spawn subagents or workflows. Give every child a self-contained prompt with paths, constraints, and the expected report.
 
+Write those paths as absolute paths. A child inherits the session's working directory, so a relative path resolves there rather than in the repository under discussion, and a child handed a path from another checkout will correctly report the file missing — a confusing result that looks like a broken agent.
+
 ## Pi Harness
 
 **Harness:** `pi`
