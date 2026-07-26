@@ -33,7 +33,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
-import { ACTIVITY_CHANNEL } from "../shared/activity-registry.ts";
 import { formatActivityStatus } from "../shared/activity-status.ts";
 import { readStringSetting } from "../shared/child-session.ts";
 import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
@@ -277,30 +276,9 @@ export default function workflows(pi: ExtensionAPI) {
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
 
-  /** Publish running workflows to the Activity Dock, which lists them all. */
-  const publishActivities = () => {
-    pi.events.emit(ACTIVITY_CHANNEL, {
-      source: "workflows",
-      activities: [...activeRuns.values()].map(({ details }) => {
-        const counts = countStates(details);
-        const total = details.agents.length;
-        return {
-          id: details.runId,
-          source: "workflows" as const,
-          title: details.name ?? details.runId,
-          state: "running" as const,
-          detail: total > 0 ? `${counts.done}/${total} agents` : undefined,
-          startedAt: details.startedAt,
-          openCommand: `/workflows ${details.runId}`,
-        };
-      }),
-    });
-  };
-
   /** Show a footer indicator only while workflows are actively running. */
   let lastUi: ExtensionContext["ui"] | undefined;
   const updateIndicator = () => {
-    publishActivities();
     const ui = lastUi;
     if (!ui) return;
     try {
@@ -349,7 +327,6 @@ export default function workflows(pi: ExtensionAPI) {
     }
     lastUi?.setStatus("workflows", undefined);
     lastUi = undefined;
-    pi.events.emit(ACTIVITY_CHANNEL, { source: "workflows", activities: [] });
   });
 
   pi.registerCommand("workflows", {
