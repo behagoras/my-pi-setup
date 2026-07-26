@@ -16,8 +16,10 @@
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit",
-    "format": "prettier --write \"extensions/**/*.{ts,cjs}\" \"*.json\"",
-    "format:check": "prettier --check \"extensions/**/*.{ts,cjs}\" \"*.json\"",
-    "test": "node --test --experimental-strip-types extensions/*/*.test.ts && npm --prefix extensions/file-search test"
+    "format": "prettier --write \"extensions/**/*.{ts,cjs}\" \"scripts/*.mjs\" \"*.json\"",
+    "format:check": "prettier --check \"extensions/**/*.{ts,cjs}\" \"scripts/*.mjs\" \"*.json\"",
+    "test": "node --test --experimental-strip-types extensions/*/*.test.ts scripts/*.test.mjs && npm --prefix extensions/file-search test",
+    "patch:scoped-models": "node scripts/patch-pi-scoped-models.mjs --apply",
+    "patch:scoped-models:check": "node scripts/patch-pi-scoped-models.mjs --check"
   }
 }
