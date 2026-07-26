@@ -8,6 +8,7 @@ This setup is fairly opinionated, it:
 - adds background terminals + ui to manage them
 - adds subagents to pi
 - adds workflows to pi
+- optionally exposes an authenticated Claude Code subscription as a main-chat provider through a pinned bridge
 - adds an ask user tool, which lets the model ask multiple choice questions
 - adds first-class `fd` (file discovery) and `rg` (content search) tools
 

@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import {
+  CONFIG_DIR_NAME,
   DefaultResourceLoader,
   getAgentDir,
   ProjectTrustStore,
@@ -7,6 +9,44 @@ import {
   type AgentSession,
   type SessionShutdownEvent,
 } from "@earendil-works/pi-coding-agent";
+
+/**
+ * Reads the user's real settings but drops every write.
+ *
+ * Children legitimately change session state (`setModel`, `setThinkingLevel`),
+ * and those calls persist through the settings manager. With file-backed
+ * storage a headless child would rewrite the human's `defaultModel` — so a
+ * workflow agent could silently repoint the interactive session. Discarding
+ * writes keeps child state per-session and the user's settings authoritative.
+ */
+class EphemeralSettingsStorage {
+  private readonly cwd: string;
+  private readonly agentDir: string;
+
+  constructor(cwd: string, agentDir: string) {
+    this.cwd = cwd;
+    this.agentDir = agentDir;
+  }
+
+  private pathFor(scope: "global" | "project") {
+    return scope === "global"
+      ? path.join(this.agentDir, "settings.json")
+      : path.join(this.cwd, CONFIG_DIR_NAME, "settings.json");
+  }
+
+  withLock(
+    scope: "global" | "project",
+    fn: (current: string | undefined) => string | undefined,
+  ) {
+    let current: string | undefined;
+    try {
+      current = readFileSync(this.pathFor(scope), "utf8");
+    } catch {
+      // A missing or unreadable settings file simply means "no settings".
+    }
+    fn(current);
+  }
+}
 
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 
@@ -26,6 +66,40 @@ export function childToolPolicy() {
   return { excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES] };
 }
 
+/**
+ * Read one top-level string setting from the user's settings files.
+ *
+ * Extensions get no settings accessor on `ExtensionContext`, so the same files
+ * Pi reads are read directly. Project settings win over global ones, and only
+ * when the project is trusted.
+ */
+export function readStringSetting(options: {
+  key: string;
+  cwd: string;
+  projectTrusted: boolean;
+  agentDir?: string;
+}): string | undefined {
+  const agentDir = options.agentDir ?? getAgentDir();
+  const candidates = [
+    ...(options.projectTrusted
+      ? [path.join(options.cwd, CONFIG_DIR_NAME, "settings.json")]
+      : []),
+    path.join(agentDir, "settings.json"),
+  ];
+  for (const file of candidates) {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+      if (parsed && typeof parsed === "object") {
+        const value = (parsed as Record<string, unknown>)[options.key];
+        if (typeof value === "string" && value.trim()) return value.trim();
+      }
+    } catch {
+      // Missing or malformed settings simply mean the key is unset here.
+    }
+  }
+  return undefined;
+}
+
 export interface ChildResourceOptions {
   cwd: string;
   projectTrusted: boolean;
@@ -36,9 +110,10 @@ export interface ChildResourceOptions {
 /** Load normal global/package resources and trust-gated project resources. */
 export async function createChildResources(options: ChildResourceOptions) {
   const agentDir = options.agentDir ?? getAgentDir();
-  const settingsManager = SettingsManager.create(options.cwd, agentDir, {
-    projectTrusted: options.projectTrusted,
-  });
+  const settingsManager = SettingsManager.fromStorage(
+    new EphemeralSettingsStorage(options.cwd, agentDir),
+    { projectTrusted: options.projectTrusted },
+  );
   const loader = new DefaultResourceLoader({
     cwd: options.cwd,
     agentDir,

@@ -34,6 +34,7 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
+import { readStringSetting } from "../shared/child-session.ts";
 import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
 import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
@@ -130,6 +131,23 @@ function errorText(error: unknown): string {
     0,
     16 * 1024,
   );
+}
+
+/** Resolve a `provider/id` or bare `id` model reference, if it names one. */
+function resolveModelReference(
+  ctx: ExtensionContext,
+  reference: string | undefined,
+): WorkflowModel | undefined {
+  if (!reference) return undefined;
+  const slash = reference.indexOf("/");
+  if (slash > 0) {
+    const resolved = ctx.modelRegistry.find(
+      reference.slice(0, slash),
+      reference.slice(slash + 1),
+    );
+    if (resolved) return resolved;
+  }
+  return ctx.modelRegistry.getAll().find((m) => m.id === reference);
 }
 
 function summaryLine(details: WorkflowDetails): string {
@@ -255,16 +273,14 @@ export default function workflows(pi: ExtensionAPI) {
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
 
-  /** Finished counts remain visible until the dashboard acknowledges them. */
+  /** Show a footer indicator only while workflows are actively running. */
   let lastUi: ExtensionContext["ui"] | undefined;
-  let completedRuns = 0;
-  let failedRuns = 0;
   const updateIndicator = () => {
     const ui = lastUi;
     if (!ui) return;
     try {
       const running = activeRuns.size;
-      if (running === 0 && completedRuns === 0 && failedRuns === 0) {
+      if (running === 0) {
         ui.setStatus("workflows", undefined);
         return;
       }
@@ -272,18 +288,13 @@ export default function workflows(pi: ExtensionAPI) {
         "workflows",
         formatActivityStatus(ui.theme, "workflows", {
           running,
-          done: completedRuns,
-          failed: failedRuns,
+          done: 0,
+          failed: 0,
         }),
       );
     } catch {
       // UI may be unavailable.
     }
-  };
-
-  const recordSettledRun = (status: WorkflowDetails["status"]) => {
-    if (status === "completed") completedRuns += 1;
-    else failedRuns += 1;
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -323,9 +334,6 @@ export default function workflows(pi: ExtensionAPI) {
       if (ctx.mode === "tui") {
         lastUi = ctx.ui;
         await showWorkflowDashboard(ctx, activeDetails, arg || undefined);
-        // Opening the dashboard acknowledges finished runs.
-        completedRuns = 0;
-        failedRuns = 0;
         updateIndicator();
         return;
       }
@@ -419,6 +427,19 @@ export default function workflows(pi: ExtensionAPI) {
       // Each concurrent child gets its own extension runtime. All children use
       // the parent cwd and live trust decision.
       const projectTrusted = ctx.isProjectTrusted();
+
+      // Models from extension-registered providers exist only in the
+      // interactive session, so an inherited one cannot run in a child.
+      // `workflowAgentModel` names the model such agents use instead.
+      const fallbackModel = resolveModelReference(
+        ctx,
+        readStringSetting({
+          key: "workflowAgentModel",
+          cwd: ctx.cwd,
+          projectTrusted,
+        }),
+      );
+
       const getResources = (structured: boolean) =>
         createWorkflowResources(
           ctx.cwd,
@@ -517,7 +538,9 @@ export default function workflows(pi: ExtensionAPI) {
           .schedule(async (runSignal) => {
             // Model/provider resolution: default to the parent session's model.
             let model: WorkflowModel | undefined = ctx.model;
+            let modelInherited = true;
             if (opts.model !== undefined || opts.provider !== undefined) {
+              modelInherited = false;
               const modelOpt =
                 typeof opts.model === "string" ? opts.model : undefined;
               const providerOpt =
@@ -572,6 +595,8 @@ export default function workflows(pi: ExtensionAPI) {
               prompt,
               schema: opts.schema,
               model,
+              modelInherited,
+              ...(fallbackModel ? { fallbackModel } : {}),
               thinkingLevel,
               cwd: ctx.cwd,
               loader: resources.loader,
@@ -594,10 +619,11 @@ export default function workflows(pi: ExtensionAPI) {
             record.contextWindow =
               outcome.contextWindow ?? record.contextWindow;
             record.transcript = outcome.transcript;
-            record.preview = (outcome.output || record.preview).slice(
-              0,
-              PREVIEW_LENGTH,
-            );
+            record.preview = (
+              outcome.warning
+                ? `⚠ ${outcome.warning}\n${outcome.output || record.preview}`
+                : outcome.output || record.preview
+            ).slice(0, PREVIEW_LENGTH);
             record.finishedAt = Date.now();
             record.state = outcome.ok ? "done" : "error";
             if (outcome.ok) {
@@ -687,7 +713,6 @@ export default function workflows(pi: ExtensionAPI) {
           })
           .finally(() => {
             activeRuns.delete(runId);
-            recordSettledRun(details.status);
             updateIndicator();
             try {
               pi.sendUserMessage(
@@ -721,7 +746,6 @@ export default function workflows(pi: ExtensionAPI) {
         await completion;
       } finally {
         activeRuns.delete(runId);
-        recordSettledRun(details.status);
         updateIndicator();
       }
       if (details.status !== "completed") {

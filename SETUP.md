@@ -34,3 +34,31 @@ Add the included theme to `~/.pi/agent/settings.json` while keeping your existin
 ```
 
 Pi will load the extensions, skills, and theme from their directories the next time it starts.
+
+## Claude subscription provider
+
+To use an authenticated Claude Code subscription as a selectable main-chat provider while Pi keeps control of its TUI and tools, first install and authenticate the official Claude Code CLI. Verify the login without printing credentials:
+
+```sh
+claude auth status
+```
+
+Then install the reviewed bridge at the exact pinned version:
+
+```sh
+pi install npm:@vanillagreen/pi-claude-bridge@1.9.0
+```
+
+Keep the bridge's optional Claude account connectors disabled so every tool call runs through Pi. The bridge enables strict MCP isolation by default. Restart Pi or run `/reload`, then use `/model` to select a `claude-bridge/*` model such as `claude-bridge/claude-opus-5`. The normal default model remains independently configured in `~/.pi/agent/settings.json`.
+
+Workflow agents run as headless child sessions, and the bridge deliberately registers its provider only in the interactive session, so a child can never use a `claude-bridge/*` model. While a bridge model is selected, agents that do not request a model would otherwise inherit an unusable one. Name the model those agents should use instead in `~/.pi/agent/settings.json`:
+
+```json
+{
+  "workflowAgentModel": "openai-codex/gpt-5.6-sol"
+}
+```
+
+An agent that falls back to it says so in its workflow entry. An explicitly requested `model` is never replaced: it fails instead.
+
+Claude subscription-backed Agent SDK usage is policy-sensitive. Recheck Anthropic's current terms before upgrading the bridge or using it beyond a personal machine. Review and explicitly pin every bridge upgrade rather than replacing the version with `latest`.
