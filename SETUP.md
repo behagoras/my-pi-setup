@@ -35,6 +35,10 @@ Add the included theme to `~/.pi/agent/settings.json` while keeping your existin
 
 Pi will load the extensions, skills, and theme from their directories the next time it starts.
 
+## Extension compatibility note
+
+The removed Activity Dock replaced Pi's native editor through `setEditorComponent()` and caused native UI commands such as `/scoped-models` to stop opening. Prefer Pi's native interface over custom editor replacements. Treat extensions that replace core TUI components as high-risk: verify built-in commands and keyboard navigation before enabling them globally.
+
 ## Claude subscription provider
 
 To use an authenticated Claude Code subscription as a selectable main-chat provider while Pi keeps control of its TUI and tools, first install and authenticate the official Claude Code CLI. Verify the login without printing credentials:
