@@ -63,8 +63,6 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (_event, ctx: ExtensionContext) => {
-    // Headless runs (`pi -p`) have no editor to dock anything below.
-    if (!ctx.hasUI || ctx.mode !== "tui") return;
     const previous = ctx.ui.getEditorComponent();
 
     const renderRow = (activity: Activity, index: number, width: number) => {
