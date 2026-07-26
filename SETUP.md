@@ -44,6 +44,25 @@ Add the included theme to `~/.pi/agent/settings.json` while keeping your existin
 
 Pi will load the extensions, skills, and theme from their directories the next time it starts.
 
+## Temporary `/scoped-models` fix
+
+Pi 0.82.1 can leave `/scoped-models` blank forever because the command waits for an unbounded model-runtime refresh before mounting its selector. The same selector opens under `PI_OFFLINE=1`, confirming that the UI itself is not the failure. Until Pi fixes this upstream, apply the narrow local patch:
+
+```sh
+npm run patch:scoped-models
+npm run patch:scoped-models:check
+```
+
+The patch changes only the native selector's model source: it reads the availability snapshot populated during startup instead of starting another blocking refresh. It verifies the package and exact source shape, creates an adjacent `.before-scoped-models-fix` backup, writes atomically, and is safe to run repeatedly. It refuses unknown Pi source rather than guessing.
+
+Pi upgrades replace installed package files. Re-run the check after every upgrade; an `unsupported` result means the upstream code changed and must be reviewed before applying anything. Restore the saved original manually with:
+
+```sh
+node scripts/patch-pi-scoped-models.mjs --restore
+```
+
+A new Pi process is required after applying or restoring the patch; `/reload` does not reload Pi core modules.
+
 ## Claude subscription provider
 
 To use an authenticated Claude Code subscription as a selectable main-chat provider while Pi keeps control of its TUI and tools, first install and authenticate the official Claude Code CLI. Verify the login without printing credentials:

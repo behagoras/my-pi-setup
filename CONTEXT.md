@@ -35,3 +35,7 @@ _Avoid_: Claude process, shared Claude session, takeover
 **Mixed-Harness Workflow**:
 A workflow whose agents explicitly select different execution harnesses; agents without a harness selection use Pi.
 _Avoid_: Hybrid workflow, multi-model workflow
+
+**Scoped Models Snapshot Patch**:
+A temporary, explicitly applied compatibility patch that makes Pi's native `/scoped-models` selector read the model availability snapshot populated at startup instead of waiting on a new unbounded runtime refresh.
+_Avoid_: Activity Dock fix, model selector extension, offline mode
