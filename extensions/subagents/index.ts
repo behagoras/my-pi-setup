@@ -75,6 +75,7 @@ import {
   type SubagentRuntime,
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
+import { ACTIVITY_CHANNEL } from "../shared/activity-registry.ts";
 
 const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
 const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
@@ -162,6 +163,26 @@ export default function (pi: ExtensionAPI) {
   };
 
   const updateStatus = (manager: SubagentManagerShape) => {
+    // The Activity Dock lists subagents next to workflows and terminals; it is
+    // fed here so it never has to reach into the manager.
+    pi.events.emit(ACTIVITY_CHANNEL, {
+      source: "subagents",
+      activities: manager.view.list().map((snap) => ({
+        id: snap.id,
+        source: "subagents" as const,
+        title: snap.title,
+        state:
+          snap.status === "running"
+            ? ("running" as const)
+            : snap.status === "error"
+              ? ("failed" as const)
+              : ("done" as const),
+        detail: `${snap.backend}${snap.meta.modelLabel ? ` · ${snap.meta.modelLabel}` : ""}`,
+        startedAt: snap.createdAt,
+        // The picker takes no id, so this opens the same list `/subagents` does.
+        openCommand: "/subagents",
+      })),
+    });
     if (!ui) return;
     const subs = manager.view.list();
     if (subs.length === 0) {
@@ -252,6 +273,7 @@ export default function (pi: ExtensionAPI) {
     resultDelivery.clear();
     unsubStatus?.();
     unsubStatus = undefined;
+    pi.events.emit(ACTIVITY_CHANNEL, { source: "subagents", activities: [] });
     ui?.setStatus("subagents", undefined);
     ui = undefined;
     const closing = runtime;

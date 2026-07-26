@@ -54,6 +54,7 @@ import {
 } from "./src/runtime.ts";
 import { sanitizeText } from "./src/ui/output-view.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
+import { ACTIVITY_CHANNEL } from "../shared/activity-registry.ts";
 
 const WIDGET_KEY = "background-terminals";
 
@@ -88,6 +89,26 @@ export default function (pi: ExtensionAPI) {
    * component creation for no visible difference. */
   let widgetRunning = 0;
   const updateWidget = (manager: TerminalManagerShape) => {
+    // Unlike the widget below, the dock lists settled terminals too, so a
+    // finished process stays reachable until it is dismissed.
+    pi.events.emit(ACTIVITY_CHANNEL, {
+      source: "terminals",
+      activities: manager.view.list().map((snap) => ({
+        id: snap.id,
+        source: "terminals" as const,
+        title: snap.title,
+        state:
+          snap.status === "running"
+            ? ("running" as const)
+            : snap.status === "done"
+              ? ("done" as const)
+              : ("failed" as const),
+        detail: snap.pid ? `pid ${snap.pid}` : undefined,
+        startedAt: snap.createdAt,
+        // The picker takes no id, so this opens the same list `/ps` does.
+        openCommand: "/ps",
+      })),
+    });
     if (!ui) return;
     try {
       const running = manager.view
@@ -188,6 +209,7 @@ export default function (pi: ExtensionAPI) {
     resultDelivery.clear();
     unsubStatus?.();
     unsubStatus = undefined;
+    pi.events.emit(ACTIVITY_CHANNEL, { source: "terminals", activities: [] });
     try {
       ui?.setWidget(WIDGET_KEY, undefined);
     } catch {
