@@ -7,6 +7,15 @@ cd ~/.pi/agent
 npm install
 ```
 
+If you instead keep the repository elsewhere and link individual extensions into
+`~/.pi/agent/extensions/`, remember that Pi loads only what is linked there. A
+newly added extension stays silent until you link it, with no error to explain
+the silence:
+
+```sh
+ln -s "$PWD/extensions/activity-dock" ~/.pi/agent/extensions/activity-dock
+```
+
 ## Firecrawl
 
 The search, scrape, and crawl tools require a Firecrawl API key. Follow [Firecrawl's Node.js getting-started guide](https://docs.firecrawl.dev/quickstarts/nodejs) to create one, then copy the example environment file:
