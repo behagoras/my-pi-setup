@@ -66,6 +66,8 @@ export interface AgentOutcome {
   /** Captured structured_output payload when a schema was supplied. */
   structured?: unknown;
   error?: string;
+  /** Non-fatal notice, e.g. an inherited model that the child could not use. */
+  warning?: string;
   aborted: boolean;
   usage: AgentUsage;
   model?: string;
@@ -85,6 +87,17 @@ export interface RunAgentOptions {
   prompt: string;
   schema?: unknown;
   model?: WorkflowModel;
+  /**
+   * True when `model` came from the parent session rather than the script.
+   * An inherited model the child cannot use falls back to `fallbackModel`;
+   * an explicitly requested one fails instead of silently changing models.
+   */
+  modelInherited?: boolean;
+  /**
+   * Model used when an inherited model is unusable in a child session, from
+   * the `workflowAgentModel` setting. Never replaces an explicit request.
+   */
+  fallbackModel?: WorkflowModel;
   thinkingLevel?: ThinkingLevel;
   cwd: string;
   loader: DefaultResourceLoader;
@@ -433,6 +446,7 @@ export async function runAgent(
   let customTools: ToolDefinition[] | undefined;
   let session: AgentSession | undefined;
   let unsubscribeToolTimeout: (() => void) | undefined;
+  let modelWarning: string | undefined;
   try {
     customTools =
       options.schema !== undefined
@@ -442,9 +456,13 @@ export async function runAgent(
             }),
           ]
         : undefined;
+    // The model is applied after extensions bind, not at construction time.
+    // Providers registered by extensions (for example a Claude bridge) only
+    // exist once the child's extensions have loaded, so resolving the model
+    // first makes every such model unusable in workflow agents — including
+    // the parent model this agent inherited.
     ({ session } = await createAgentSession({
       cwd: options.cwd,
-      ...(options.model ? { model: options.model } : {}),
       ...(options.thinkingLevel
         ? { thinkingLevel: options.thinkingLevel }
         : {}),
@@ -455,6 +473,45 @@ export async function runAgent(
       ...childToolPolicy(),
     }));
     await bindChildSessionExtensions(session);
+    if (options.model) {
+      try {
+        await session.setModel(options.model);
+      } catch (error) {
+        const requested = `${options.model.provider}/${options.model.id}`;
+        if (!options.modelInherited) {
+          throw new Error(
+            `Model ${requested} is unavailable to workflow agents: ${errorText(error)}`,
+          );
+        }
+        const fallback = options.fallbackModel;
+        if (!fallback) {
+          throw new Error(
+            `Inherited model ${requested} is unavailable to workflow agents ` +
+              `(${errorText(error)}). Providers registered by extensions, such as ` +
+              `a Claude bridge, only exist in the interactive session. Pass an ` +
+              `explicit \`model\` to agent(), or set \`workflowAgentModel\` in ` +
+              `settings.json.`,
+          );
+        }
+        try {
+          await session.setModel(fallback);
+        } catch (fallbackError) {
+          throw new Error(
+            `Inherited model ${requested} is unavailable to workflow agents ` +
+              `(${errorText(error)}), and the configured workflowAgentModel ` +
+              `${fallback.provider}/${fallback.id} also failed: ${errorText(fallbackError)}`,
+          );
+        }
+        modelWarning =
+          `Inherited model ${requested} is unavailable to workflow agents; ` +
+          `used workflowAgentModel ${fallback.provider}/${fallback.id} instead.`;
+      }
+      // setModel clamps thinking to the new model's capabilities, so the
+      // requested level is reapplied rather than left at the clamped default.
+      if (options.thinkingLevel) {
+        session.setThinkingLevel(options.thinkingLevel);
+      }
+    }
     unsubscribeToolTimeout = guardWorkflowChildTools(
       session,
       options.toolCallTimeoutMs,
@@ -641,6 +698,7 @@ export async function runAgent(
     ok: true,
     output,
     structured,
+    ...(modelWarning ? { warning: modelWarning } : {}),
     aborted: false,
     usage,
     model: modelId,
