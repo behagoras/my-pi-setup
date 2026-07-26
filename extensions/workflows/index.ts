@@ -106,7 +106,10 @@ interface AgentCallOptions {
   model?: unknown;
   provider?: unknown;
   effort?: unknown;
+  harness?: unknown;
 }
+
+const HARNESSES = ["pi", "claude"] as const;
 
 const WorkflowParams = Type.Object({
   script: Type.String({
@@ -534,12 +537,39 @@ export default function workflows(pi: ExtensionAPI) {
         if (controller.signal.aborted)
           return fail("Workflow was aborted before this agent started");
 
+        const harnessOpt =
+          opts.harness === undefined ? "pi" : String(opts.harness);
+        if (!(HARNESSES as readonly string[]).includes(harnessOpt)) {
+          return fail(
+            `agent "${label}": invalid harness "${harnessOpt}" (use ${HARNESSES.join("|")})`,
+          );
+        }
+        const harness = harnessOpt as (typeof HARNESSES)[number];
+        if (harness === "claude" && opts.provider !== undefined) {
+          return fail(
+            `agent "${label}": \`provider\` does not apply to the claude harness ` +
+              `(pass \`model\` as a Claude alias such as "opus")`,
+          );
+        }
+
         return controller
           .schedule(async (runSignal) => {
+            // The claude harness names Claude models by alias, so it skips Pi's
+            // registry and never inherits the parent session's model.
+            const claudeModel =
+              harness === "claude" && typeof opts.model === "string"
+                ? opts.model
+                : undefined;
             // Model/provider resolution: default to the parent session's model.
             let model: WorkflowModel | undefined = ctx.model;
             let modelInherited = true;
-            if (opts.model !== undefined || opts.provider !== undefined) {
+            if (harness === "claude") {
+              model = undefined;
+              modelInherited = false;
+            } else if (
+              opts.model !== undefined ||
+              opts.provider !== undefined
+            ) {
               modelInherited = false;
               const modelOpt =
                 typeof opts.model === "string" ? opts.model : undefined;
@@ -574,7 +604,7 @@ export default function workflows(pi: ExtensionAPI) {
               }
               model = resolved;
             }
-            record.model = model?.id;
+            record.model = harness === "claude" ? claudeModel : model?.id;
             record.contextWindow = model?.contextWindow;
             emit();
 
@@ -596,6 +626,9 @@ export default function workflows(pi: ExtensionAPI) {
               schema: opts.schema,
               model,
               modelInherited,
+              harness,
+              projectTrusted,
+              ...(claudeModel ? { claudeModel } : {}),
               ...(fallbackModel ? { fallbackModel } : {}),
               thinkingLevel,
               cwd: ctx.cwd,

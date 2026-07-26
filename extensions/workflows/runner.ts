@@ -37,6 +37,7 @@ import {
   STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION,
   STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
 } from "./prompt.ts";
+import { runClaudeAgent } from "./claude-harness.ts";
 import { safeStringify, truncateUtf8 } from "./serialization.ts";
 
 const AGENT_OUTPUT_MAX_BYTES = 64 * 1024;
@@ -93,6 +94,15 @@ export interface RunAgentOptions {
    * an explicitly requested one fails instead of silently changing models.
    */
   modelInherited?: boolean;
+  /**
+   * Which runtime executes the agent. `pi` (default) runs a Pi child session
+   * with Pi's tools; `claude` runs the Claude Agent SDK with Claude's tools.
+   */
+  harness?: "pi" | "claude";
+  /** Claude model alias for the `claude` harness, e.g. "opus". */
+  claudeModel?: string;
+  /** Whether Pi trusts the project; gates local config for Claude agents. */
+  projectTrusted?: boolean;
   /**
    * Model used when an inherited model is unusable in a child session, from
    * the `workflowAgentModel` setting. Never replaces an explicit request.
@@ -442,6 +452,33 @@ function isAssistantResponseEvent(event: AgentSessionEvent) {
 export async function runAgent(
   options: RunAgentOptions,
 ): Promise<AgentOutcome> {
+  // Claude agents run on the Claude Agent SDK with Claude's own tools, so they
+  // bypass Pi child sessions entirely (see claude-harness.ts).
+  if (options.harness === "claude") {
+    return runClaudeAgent({
+      prompt: options.prompt,
+      cwd: options.cwd,
+      projectTrusted: options.projectTrusted ?? false,
+      ...(options.claudeModel ? { model: options.claudeModel } : {}),
+      ...(options.thinkingLevel
+        ? { thinkingLevel: options.thinkingLevel }
+        : {}),
+      ...(options.schema !== undefined ? { schema: options.schema } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.onProgress
+        ? {
+            onProgress: (progress) =>
+              options.onProgress?.({
+                preview: progress.preview,
+                usage: progress.usage,
+                ...(progress.model ? { model: progress.model } : {}),
+                transcript: progress.transcript,
+              }),
+          }
+        : {}),
+    });
+  }
+
   let structured: unknown;
   let customTools: ToolDefinition[] | undefined;
   let session: AgentSession | undefined;
