@@ -1,7 +1,15 @@
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import {
+  apiEquivalentCostUsd,
+  billingProviderName,
+  hasApiEquivalentUsage,
+  type ApiEquivalentCostBreakdown,
+} from "../shared/api-equivalent-cost.ts";
 import {
   emptyModelInfoState,
   MODEL_INFO_CHANNEL,
@@ -11,16 +19,49 @@ import {
 const CHARS_PER_ESTIMATED_TOKEN = 4;
 const LIVE_UPDATE_INTERVAL_MS = 200;
 
-function getSessionCost(ctx: ExtensionContext) {
-  let cost = 0;
+type ModelResolver = (
+  provider: string,
+  modelId: string,
+) => Model<Api> | undefined;
 
-  for (const entry of ctx.sessionManager.getBranch()) {
+export function getBranchApiEquivalentCost(
+  entries: ReadonlyArray<SessionEntry>,
+  resolveModel: ModelResolver,
+) {
+  const byProvider: Record<string, number> = {};
+
+  for (const entry of entries) {
     if (entry.type === "message" && entry.message.role === "assistant") {
-      cost += entry.message.usage.cost.total;
+      const message = entry.message;
+      let amount = message.usage.cost.total;
+      // The Claude bridge historically persisted real token usage with an
+      // intentional $0 cost. Reconstruct only that known case; zero-priced
+      // local/custom providers remain genuinely zero.
+      if (
+        amount === 0 &&
+        message.provider.startsWith("claude-bridge") &&
+        hasApiEquivalentUsage(message.usage)
+      ) {
+        const model =
+          resolveModel(
+            message.provider,
+            message.responseModel ?? message.model,
+          ) ?? resolveModel(message.provider, message.model);
+        if (model) amount = apiEquivalentCostUsd(model, message.usage);
+      }
+      if (!Number.isFinite(amount) || amount <= 0) continue;
+      const provider = billingProviderName(message.provider);
+      byProvider[provider] = (byProvider[provider] ?? 0) + amount;
     }
   }
 
-  return cost;
+  return {
+    totalUsd: Object.values(byProvider).reduce(
+      (total, amount) => total + amount,
+      0,
+    ),
+    byProvider,
+  } satisfies ApiEquivalentCostBreakdown;
 }
 
 function estimateContentTokens(characters: number) {
@@ -56,7 +97,10 @@ export default function modelInfo(pi: ExtensionAPI) {
       contextTokens: usage?.tokens ?? null,
       contextWindow: usage?.contextWindow ?? model?.contextWindow ?? 0,
       contextPercent: usage?.percent ?? null,
-      cost: getSessionCost(ctx),
+      apiEquivalentCost: getBranchApiEquivalentCost(
+        ctx.sessionManager.getBranch(),
+        (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
+      ),
     };
     publish();
   }

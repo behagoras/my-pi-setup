@@ -51,6 +51,7 @@ import {
 import {
   formatActivityStatus,
   formatContextUtilization,
+  formatSubagentActivityDetail,
 } from "./src/format.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
@@ -76,6 +77,7 @@ import {
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 import { ACTIVITY_CHANNEL } from "../shared/activity-registry.ts";
+import { SUBAGENT_COST_CHANNEL } from "../shared/dashboard-state.ts";
 
 const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
 const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
@@ -163,6 +165,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   const updateStatus = (manager: SubagentManagerShape) => {
+    pi.events.emit(SUBAGENT_COST_CHANNEL, manager.view.getApiEquivalentCost());
     // The Activity Dock lists subagents next to workflows and terminals; it is
     // fed here so it never has to reach into the manager.
     pi.events.emit(ACTIVITY_CHANNEL, {
@@ -177,7 +180,7 @@ export default function (pi: ExtensionAPI) {
             : snap.status === "error"
               ? ("failed" as const)
               : ("done" as const),
-        detail: `${snap.backend}${snap.meta.modelLabel ? ` · ${snap.meta.modelLabel}` : ""}`,
+        detail: formatSubagentActivityDetail(snap),
         startedAt: snap.createdAt,
         // The picker takes no id, so this opens the same list `/subagents` does.
         openCommand: "/subagents",
@@ -261,9 +264,19 @@ export default function (pi: ExtensionAPI) {
     if (sessionContext?.isIdle()) flushResults();
   };
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
     sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
+    const existingManager = managerPromise;
+    const existingRuntime = runtime;
+    if (existingManager && existingRuntime) {
+      const manager = await existingManager;
+      await existingRuntime.runPromise(manager.resetApiEquivalentCost);
+    }
+    pi.events.emit(SUBAGENT_COST_CHANNEL, {
+      totalUsd: 0,
+      byProvider: {},
+    });
   });
 
   pi.on("agent_settled", flushResults);
@@ -274,6 +287,10 @@ export default function (pi: ExtensionAPI) {
     unsubStatus?.();
     unsubStatus = undefined;
     pi.events.emit(ACTIVITY_CHANNEL, { source: "subagents", activities: [] });
+    pi.events.emit(SUBAGENT_COST_CHANNEL, {
+      totalUsd: 0,
+      byProvider: {},
+    });
     ui?.setStatus("subagents", undefined);
     ui = undefined;
     const closing = runtime;

@@ -27,6 +27,7 @@ import type {
   SubagentMeta,
 } from "../domain.ts";
 import { SendError } from "../domain.ts";
+import { billingProviderName } from "../../../shared/api-equivalent-cost.ts";
 
 export interface StubProfile {
   readonly backend: BackendName;
@@ -162,6 +163,25 @@ const makeStubSession = (
           _tag: "UsageChanged",
           tokens: Math.min(profile.contextWindow, 2400 * (turn + 1)),
           contextWindow: profile.contextWindow,
+          apiEquivalentCost: {
+            provider: billingProviderName(profile.backend),
+            modelLabel: state.meta.modelLabel,
+            amountUsd: turn * 0.25 + 0.1,
+            kind: "absolute",
+            counterKey: "stub-session",
+          },
+        });
+        // Duplicate absolute notifications are common in native protocols and
+        // must never charge twice.
+        yield* emit({
+          _tag: "UsageChanged",
+          apiEquivalentCost: {
+            provider: billingProviderName(profile.backend),
+            modelLabel: state.meta.modelLabel,
+            amountUsd: turn * 0.25 + 0.1,
+            kind: "absolute",
+            counterKey: "stub-session",
+          },
         });
 
         if (failing) {
@@ -192,6 +212,13 @@ const makeStubSession = (
           _tag: "UsageChanged",
           tokens: Math.min(profile.contextWindow, 2400 * (turn + 1) + 900),
           contextWindow: profile.contextWindow,
+          apiEquivalentCost: {
+            provider: billingProviderName(profile.backend),
+            modelLabel: state.meta.modelLabel,
+            amountUsd: (turn + 1) * 0.25,
+            kind: "absolute",
+            counterKey: "stub-session",
+          },
         });
         yield* emit({
           _tag: "RunSettled",

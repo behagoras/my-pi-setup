@@ -4,6 +4,7 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { SubagentSnapshot } from "./domain.ts";
 
 export interface ContextUtilization {
   /** Current conversation context occupancy; undefined while unknown. */
@@ -47,6 +48,18 @@ export function formatContextUtilization(usage: ContextUtilization) {
   if (capacity === undefined) return "";
   const percent = contextPercent(usage);
   return `${percent === undefined ? "?" : percent}%/${formatCompactTokens(capacity)}`;
+}
+
+export function formatSubagentActivityDetail(
+  snapshot: Pick<SubagentSnapshot, "backend" | "meta" | "apiEquivalentCost">,
+) {
+  return [
+    snapshot.backend,
+    snapshot.meta.modelLabel,
+    `$${snapshot.apiEquivalentCost.totalUsd.toFixed(2)}`,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(" · ");
 }
 
 interface ActivityCounts {

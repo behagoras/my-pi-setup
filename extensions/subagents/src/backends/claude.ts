@@ -20,6 +20,7 @@ import {
   type SDKResultMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
 import type { SubagentBackend, SubagentSession } from "../backend.ts";
@@ -33,6 +34,10 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
+import {
+  apiEquivalentCostUsd,
+  type ApiEquivalentUsage,
+} from "../../../shared/api-equivalent-cost.ts";
 
 const CLAUDE_CONTEXT_WINDOW = 200_000;
 const INTERRUPT_TIMEOUT_MS = 2_000;
@@ -260,6 +265,63 @@ function resultContextWindow(result: SDKResultMessage) {
   return Object.values(result.modelUsage)[0]?.contextWindow;
 }
 
+export interface ClaudeApiEquivalentCostState {
+  readonly messageCostUsdById: Map<string, number>;
+  readonly totalCostUsd: number;
+}
+
+export const emptyClaudeApiEquivalentCostState = () => ({
+  messageCostUsdById: new Map<string, number>(),
+  totalCostUsd: 0,
+});
+
+/**
+ * Assistant frames may repeat or progressively update one API response.
+ * Price the full request each time, then accept only a monotonic delta for
+ * that message id.
+ */
+export function foldClaudeAssistantApiEquivalentCost(
+  state: ClaudeApiEquivalentCostState,
+  messageId: string,
+  usage: ApiEquivalentUsage,
+  model: Model<Api> | undefined,
+) {
+  if (!messageId || !model) return state;
+  const currentCostUsd = apiEquivalentCostUsd(model, usage);
+  if (!Number.isFinite(currentCostUsd) || currentCostUsd < 0) return state;
+
+  const previousCostUsd = state.messageCostUsdById.get(messageId) ?? 0;
+  const nextCostUsd = Math.max(previousCostUsd, currentCostUsd);
+  if (nextCostUsd === previousCostUsd) return state;
+
+  const messageCostUsdById = new Map(state.messageCostUsdById);
+  messageCostUsdById.set(messageId, nextCostUsd);
+  return {
+    messageCostUsdById,
+    totalCostUsd:
+      state.totalCostUsd + Math.max(0, nextCostUsd - previousCostUsd),
+  } satisfies ClaudeApiEquivalentCostState;
+}
+
+/**
+ * SDK result usage/cost spans the whole persistent Claude session. Compare it
+ * with the equally cumulative local counter, never a per-run subtotal. Clear
+ * message watermarks at the run boundary to keep persistent sessions bounded.
+ */
+export function foldClaudeResultApiEquivalentCost(
+  state: ClaudeApiEquivalentCostState,
+  cumulativeResultCostUsd: number,
+) {
+  const usableResultCostUsd =
+    Number.isFinite(cumulativeResultCostUsd) && cumulativeResultCostUsd > 0
+      ? cumulativeResultCostUsd
+      : 0;
+  return {
+    messageCostUsdById: new Map<string, number>(),
+    totalCostUsd: Math.max(state.totalCostUsd, usableResultCostUsd),
+  } satisfies ClaudeApiEquivalentCostState;
+}
+
 function waitBounded(operation: Promise<unknown>, timeoutMs: number) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<void>((resolve) => {
@@ -306,6 +368,7 @@ const makeClaudeSession = (
       submittedUuids: new Set<string>(),
       currentText: "",
       liveText: "",
+      apiEquivalentCost: emptyClaudeApiEquivalentCostState(),
       tools: new Map<string, string>(),
       settleWaiters: new Set<() => void>(),
       meta: {
@@ -369,6 +432,31 @@ const makeClaudeSession = (
 
     const partialText = () => state.liveText || state.currentText || undefined;
 
+    const emitApiEquivalentCost = (modelLabel?: string) => {
+      if (state.apiEquivalentCost.totalCostUsd <= 0) return;
+      emit({
+        _tag: "UsageChanged",
+        apiEquivalentCost: {
+          provider: "Claude",
+          modelLabel,
+          amountUsd: state.apiEquivalentCost.totalCostUsd,
+          kind: "absolute",
+          counterKey: "claude-sdk-session",
+        },
+      });
+    };
+
+    const updateApiEquivalentCost = (
+      next: ClaudeApiEquivalentCostState,
+      modelLabel?: string,
+    ) => {
+      const previousTotalCostUsd = state.apiEquivalentCost.totalCostUsd;
+      state.apiEquivalentCost = next;
+      if (next.totalCostUsd > previousTotalCostUsd) {
+        emitApiEquivalentCost(modelLabel);
+      }
+    };
+
     const settle = (outcome: RunOutcome) => {
       if (!state.activeRun) return;
       emit({ _tag: "RunSettled", outcome });
@@ -413,6 +501,27 @@ const makeClaudeSession = (
       if (message.parent_tool_use_id == null) {
         const tokens = contextOccupancyTokens(message.message.usage);
         if (tokens !== undefined) emit({ _tag: "UsageChanged", tokens });
+        const usage = message.message.usage;
+        const model = task.parent.modelRegistry?.find(
+          "anthropic",
+          message.message.model,
+        );
+        if (model) {
+          updateApiEquivalentCost(
+            foldClaudeAssistantApiEquivalentCost(
+              state.apiEquivalentCost,
+              message.message.id,
+              {
+                input: usage.input_tokens ?? 0,
+                output: usage.output_tokens ?? 0,
+                cacheRead: usage.cache_read_input_tokens ?? 0,
+                cacheWrite: usage.cache_creation_input_tokens ?? 0,
+              },
+              model,
+            ),
+            message.message.model,
+          );
+        }
       }
 
       const text = message.message.content
@@ -472,6 +581,37 @@ const makeClaudeSession = (
       ) {
         updateMeta({ contextWindow });
       }
+
+      const resultApiEquivalentCost = Object.entries(result.modelUsage).reduce(
+        (total, [rawModel, usage]) => {
+          const modelId = usage.canonicalModel ?? rawModel;
+          const model =
+            task.parent.modelRegistry?.find("anthropic", modelId) ??
+            task.parent.modelRegistry?.find("anthropic", rawModel);
+          if (!model) return total + Math.max(0, usage.costUSD);
+          return (
+            total +
+            apiEquivalentCostUsd(model, {
+              input: usage.inputTokens,
+              output: usage.outputTokens,
+              cacheRead: usage.cacheReadInputTokens,
+              cacheWrite: usage.cacheCreationInputTokens,
+            })
+          );
+        },
+        0,
+      );
+      const fallbackResultCost =
+        resultApiEquivalentCost > 0
+          ? resultApiEquivalentCost
+          : Math.max(0, result.total_cost_usd);
+      updateApiEquivalentCost(
+        foldClaudeResultApiEquivalentCost(
+          state.apiEquivalentCost,
+          fallbackResultCost,
+        ),
+        state.meta.modelLabel,
+      );
 
       if (state.interruptRequested) {
         settle({ _tag: "Interrupted", partialText: partialText() });

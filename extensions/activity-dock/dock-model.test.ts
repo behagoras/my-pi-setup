@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Activity } from "../shared/activity-registry.ts";
 import { DockModel, MAX_VISIBLE } from "./dock-model.ts";
+import { fitActivityDetail } from "./index.ts";
 
 function activity(overrides: Partial<Activity> = {}): Activity {
   return {
@@ -129,4 +131,12 @@ test("a shrinking list keeps the selection in range", () => {
   model.replace("workflows", [activity({ id: "a", startedAt: 3 })]);
   assert.equal(model.selectedIndex, 0);
   assert.equal(model.selected?.id, "a");
+});
+
+test("narrow activity details retain their trailing cost without overflowing", () => {
+  const detail = " codex · openai-codex/gpt-5.6-sol · $2.20";
+  const fitted = fitActivityDetail(detail, 28);
+
+  assert.ok(visibleWidth(fitted) <= 28);
+  assert.match(fitted, /….* · \$2\.20$/);
 });
