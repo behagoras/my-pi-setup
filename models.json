@@ -1,3 +1,40 @@
 {
-  "providers": {}
+  "providers": {
+    "claude-bridge": {
+      "modelOverrides": {
+        "claude-fable-5": {
+          "cost": {
+            "input": 10,
+            "output": 50,
+            "cacheRead": 1,
+            "cacheWrite": 12.5
+          }
+        },
+        "claude-mythos-5": {
+          "cost": {
+            "input": 10,
+            "output": 50,
+            "cacheRead": 1,
+            "cacheWrite": 12.5
+          }
+        },
+        "claude-opus-5": {
+          "cost": {
+            "input": 5,
+            "output": 25,
+            "cacheRead": 0.5,
+            "cacheWrite": 6.25
+          }
+        },
+        "claude-sonnet-5": {
+          "cost": {
+            "input": 3,
+            "output": 15,
+            "cacheRead": 0.3,
+            "cacheWrite": 3.75
+          }
+        }
+      }
+    }
+  }
 }

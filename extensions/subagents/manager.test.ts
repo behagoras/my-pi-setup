@@ -43,10 +43,10 @@ const TestRegistryLive = Layer.sync(BackendRegistry, () => {
   );
 });
 
-const createTestRuntime = () =>
-  ManagedRuntime.make(
-    SubagentManagerLive.pipe(Layer.provide(TestRegistryLive)),
-  );
+const createTestRuntime = (
+  registryLayer: Layer.Layer<BackendRegistry> = TestRegistryLive,
+) =>
+  ManagedRuntime.make(SubagentManagerLive.pipe(Layer.provide(registryLayer)));
 
 const parent: ParentContext = {
   parentCwd: process.cwd(),
@@ -97,6 +97,12 @@ test("stub subagent completes and delivers a final result", async () => {
     );
     assert.ok(done.turns >= 2);
     assert.ok(done.transcript.some((item) => item.kind === "toolResult"));
+    assert.equal(done.apiEquivalentCost.totalUsd, 0.25);
+    assert.deepEqual(done.apiEquivalentCost.byProvider, { Claude: 0.25 });
+    assert.deepEqual(manager.view.getApiEquivalentCost(), {
+      totalUsd: 0.25,
+      byProvider: { Claude: 0.25 },
+    });
     // The waitFor marked the settle as consumed.
     assert.deepEqual(settled, [{ id: snap.id, consumed: true }]);
   });
@@ -272,5 +278,71 @@ test("send steers an idle subagent into another turn", async () => {
     const afterSecond = manager.view.get(snap.id);
     assert.equal(afterSecond?.status, "done");
     assert.match(afterSecond?.finalText ?? "", /Second turn/);
+    assert.equal(afterSecond?.apiEquivalentCost.totalUsd, 0.5);
+    assert.deepEqual(manager.view.getApiEquivalentCost(), {
+      totalUsd: 0.5,
+      byProvider: { Claude: 0.5 },
+    });
   });
+});
+
+test("resetting the session cost ledger does not reset a subagent's absolute counter", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.spawn("claude", task("First session turn")),
+    );
+    await runTool(runtime, manager.waitFor([snap.id]));
+    assert.equal(manager.view.getApiEquivalentCost().totalUsd, 0.25);
+
+    await runTool(runtime, manager.resetApiEquivalentCost);
+    assert.deepEqual(manager.view.getApiEquivalentCost(), {
+      totalUsd: 0,
+      byProvider: {},
+    });
+    assert.equal(manager.view.get(snap.id)?.apiEquivalentCost.totalUsd, 0.25);
+
+    await runTool(runtime, manager.send(snap.id, "New session turn"));
+    while (manager.view.get(snap.id)?.status !== "running") {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await runTool(runtime, manager.waitFor([snap.id]));
+    assert.deepEqual(manager.view.getApiEquivalentCost(), {
+      totalUsd: 0.25,
+      byProvider: { Claude: 0.25 },
+    });
+    assert.equal(manager.view.get(snap.id)?.apiEquivalentCost.totalUsd, 0.5);
+  });
+});
+
+test("session cost ledger survives pruning old subagent snapshots", async () => {
+  const quickRegistry = Layer.sync(BackendRegistry, () => {
+    const backend = makeStubBackend({
+      backend: "codex",
+      defaultModelLabel: "gpt-5.6-sol",
+      contextWindow: 272_000,
+      toolName: "shell",
+      cadenceMs: 0,
+    });
+    return new Map<BackendName, SubagentBackend>([["codex", backend]]);
+  });
+  const runtime = createTestRuntime(quickRegistry);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    for (let index = 0; index < 65; index += 1) {
+      const snap = await runTool(
+        runtime,
+        manager.spawn("codex", task(`quick ${index}`)),
+      );
+      await runTool(runtime, manager.waitFor([snap.id]));
+    }
+
+    assert.equal(manager.view.size(), 64);
+    assert.deepEqual(manager.view.getApiEquivalentCost(), {
+      totalUsd: 16.25,
+      byProvider: { OpenAI: 16.25 },
+    });
+  } finally {
+    await runtime.dispose();
+  }
 });

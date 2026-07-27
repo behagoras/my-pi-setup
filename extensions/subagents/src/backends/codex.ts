@@ -12,6 +12,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
 import type { SubagentBackend, SubagentSession } from "../backend.ts";
@@ -24,6 +25,10 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
+import {
+  apiEquivalentCostUsd,
+  type ApiEquivalentUsage,
+} from "../../../shared/api-equivalent-cost.ts";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MODEL_LIST_TIMEOUT_MS = 5_000;
@@ -210,11 +215,153 @@ function textInput(text: string) {
  */
 export function parseThreadTokenUsage(params: unknown) {
   const usage = record(record(params)?.tokenUsage);
+  const total = record(usage?.total);
   const last = record(usage?.last);
   return {
     tokens: numberValue(last?.totalTokens),
     contextWindow: numberValue(usage?.modelContextWindow),
+    cumulativeBillingUsage: parseBillingUsage(total),
+    lastBillingUsage: parseBillingUsage(last),
   };
+}
+
+function parseBillingUsage(value: JsonRecord | undefined) {
+  if (!value) return undefined;
+  const inputWithCache = numberValue(value.inputTokens);
+  const output = numberValue(value.outputTokens);
+  if (inputWithCache === undefined || output === undefined) return undefined;
+  const cacheRead = numberValue(value.cachedInputTokens) ?? 0;
+  const cacheWrite = numberValue(value.cacheWriteInputTokens) ?? 0;
+  return {
+    // Codex includes both cache categories in inputTokens.
+    input: Math.max(0, inputWithCache - cacheRead - cacheWrite),
+    output,
+    cacheRead,
+    cacheWrite,
+    reasoning: numberValue(value.reasoningOutputTokens),
+  } satisfies ApiEquivalentUsage;
+}
+
+function usageDelta(current: ApiEquivalentUsage, previous: ApiEquivalentUsage) {
+  return {
+    input: current.input - previous.input,
+    output: current.output - previous.output,
+    cacheRead: current.cacheRead - previous.cacheRead,
+    cacheWrite: current.cacheWrite - previous.cacheWrite,
+    reasoning:
+      current.reasoning === undefined && previous.reasoning === undefined
+        ? undefined
+        : (current.reasoning ?? 0) - (previous.reasoning ?? 0),
+  } satisfies ApiEquivalentUsage;
+}
+
+function isNonnegativeUsage(usage: ApiEquivalentUsage) {
+  return (
+    usage.input >= 0 &&
+    usage.output >= 0 &&
+    usage.cacheRead >= 0 &&
+    usage.cacheWrite >= 0
+  );
+}
+
+function sameUsage(a: ApiEquivalentUsage, b: ApiEquivalentUsage) {
+  return (
+    a.input === b.input &&
+    a.output === b.output &&
+    a.cacheRead === b.cacheRead &&
+    a.cacheWrite === b.cacheWrite
+  );
+}
+
+export interface CodexApiEquivalentCostState {
+  readonly cumulativeUsage?: ApiEquivalentUsage;
+  readonly lastUsage?: ApiEquivalentUsage;
+  readonly activeModelLabel?: string;
+  readonly currentRequestCostUsd: number;
+  readonly totalCostUsd: number;
+}
+
+export const emptyCodexApiEquivalentCostState = () => ({
+  currentRequestCostUsd: 0,
+  totalCostUsd: 0,
+});
+
+/**
+ * Convert Codex's absolute cumulative notifications into a monotonic dollar
+ * counter. Pricing the full `last` request before diffing preserves request-
+ * wide long-context tiers, while cumulative usage rejects duplicate events.
+ */
+export function foldCodexApiEquivalentCost(
+  state: CodexApiEquivalentCostState,
+  sample: {
+    readonly cumulativeBillingUsage?: ApiEquivalentUsage;
+    readonly lastBillingUsage?: ApiEquivalentUsage;
+  },
+  modelLabel: string | undefined,
+  model: Model<Api> | undefined,
+) {
+  const cumulative = sample.cumulativeBillingUsage;
+  const last = sample.lastBillingUsage;
+  if (!cumulative || !last || !model || !modelLabel) return state;
+
+  if (!state.cumulativeUsage) {
+    const requestCost = apiEquivalentCostUsd(model, last);
+    return {
+      cumulativeUsage: cumulative,
+      lastUsage: last,
+      activeModelLabel: modelLabel,
+      currentRequestCostUsd: requestCost,
+      totalCostUsd: state.totalCostUsd + requestCost,
+    } satisfies CodexApiEquivalentCostState;
+  }
+
+  const cumulativeDelta = usageDelta(cumulative, state.cumulativeUsage);
+  if (!isNonnegativeUsage(cumulativeDelta)) {
+    // A restarted/reset native counter must never subtract session cost.
+    return state;
+  }
+  if (
+    sameUsage(cumulativeDelta, {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    })
+  ) {
+    return state;
+  }
+
+  const newRequest =
+    sameUsage(cumulativeDelta, last) ||
+    (state.lastUsage !== undefined &&
+      (last.output < state.lastUsage.output ||
+        last.input < state.lastUsage.input ||
+        last.cacheRead < state.lastUsage.cacheRead ||
+        last.cacheWrite < state.lastUsage.cacheWrite));
+  const requestCost = apiEquivalentCostUsd(model, last);
+  const increment =
+    newRequest || state.activeModelLabel !== modelLabel
+      ? requestCost
+      : Math.max(0, requestCost - state.currentRequestCostUsd);
+  return {
+    cumulativeUsage: cumulative,
+    lastUsage: last,
+    activeModelLabel: modelLabel,
+    currentRequestCostUsd:
+      newRequest || state.activeModelLabel !== modelLabel
+        ? requestCost
+        : Math.max(state.currentRequestCostUsd, requestCost),
+    totalCostUsd: state.totalCostUsd + increment,
+  } satisfies CodexApiEquivalentCostState;
+}
+
+export function resolveCodexPricingModel(
+  findModel:
+    ((provider: string, modelId: string) => Model<Api> | undefined) | undefined,
+  modelId: string | undefined,
+) {
+  if (!findModel || !modelId) return undefined;
+  return findModel("openai-codex", modelId) ?? findModel("openai", modelId);
 }
 
 // --- Item translation --------------------------------------------------------
@@ -356,6 +503,8 @@ const makeCodexSession = (
     };
     const pendingRequests = new Map<number, PendingRequest>();
     const tools = new Map<string, ToolState>();
+    let apiEquivalentCost = emptyCodexApiEquivalentCostState();
+    let reportedUnpricedModel = false;
     /** Turns locally settled by the interrupt fallback may still emit late events. */
     const ignoredTurnIds = new Set<string>();
 
@@ -707,12 +856,51 @@ const makeCodexSession = (
           break;
         }
         case "thread/tokenUsage/updated": {
-          const { tokens, contextWindow } = parseThreadTokenUsage(params);
+          const usage = parseThreadTokenUsage(params);
+          const { tokens, contextWindow } = usage;
           if (contextWindow !== undefined) {
             state.meta = { ...state.meta, contextWindow };
             emit({ _tag: "MetaChanged", meta: { contextWindow } });
           }
-          emit({ _tag: "UsageChanged", tokens, contextWindow });
+          const modelLabel = state.meta.modelLabel;
+          const modelId = modelLabel?.startsWith("openai-codex/")
+            ? modelLabel.slice("openai-codex/".length)
+            : modelLabel;
+          const model = resolveCodexPricingModel(
+            task.parent.modelRegistry
+              ? (provider, id) => task.parent.modelRegistry?.find(provider, id)
+              : undefined,
+            modelId,
+          );
+          if (modelId && !model && !reportedUnpricedModel) {
+            reportedUnpricedModel = true;
+            emit({
+              _tag: "BackendError",
+              message: `API-equivalent cost unavailable: no registry pricing for ${modelId}.`,
+            });
+          }
+          apiEquivalentCost = foldCodexApiEquivalentCost(
+            apiEquivalentCost,
+            usage,
+            modelLabel,
+            model,
+          );
+          emit({
+            _tag: "UsageChanged",
+            tokens,
+            contextWindow,
+            ...(apiEquivalentCost.totalCostUsd > 0
+              ? {
+                  apiEquivalentCost: {
+                    provider: "OpenAI",
+                    modelLabel,
+                    amountUsd: apiEquivalentCost.totalCostUsd,
+                    kind: "absolute" as const,
+                    counterKey: "codex-thread",
+                  },
+                }
+              : {}),
+          });
           break;
         }
         case "error": {

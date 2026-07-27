@@ -1,6 +1,9 @@
 export const MODEL_INFO_CHANNEL = "dashboard:model-info";
 export const GIT_INFO_CHANNEL = "dashboard:git-info";
+export const SUBAGENT_COST_CHANNEL = "dashboard:subagent-api-equivalent-cost";
 export const REFRESH_CHANNEL = "dashboard:refresh";
+
+import type { ApiEquivalentCostBreakdown } from "./api-equivalent-cost.ts";
 
 export interface ModelInfoState {
   provider: string;
@@ -10,7 +13,7 @@ export interface ModelInfoState {
   contextTokens: number | null;
   contextWindow: number;
   contextPercent: number | null;
-  cost: number;
+  apiEquivalentCost: ApiEquivalentCostBreakdown;
   tokensPerSecond: number | null;
   generating: boolean;
 }
@@ -37,7 +40,7 @@ export function emptyModelInfoState(): ModelInfoState {
     contextTokens: null,
     contextWindow: 0,
     contextPercent: null,
-    cost: 0,
+    apiEquivalentCost: { totalUsd: 0, byProvider: {} },
     tokensPerSecond: null,
     generating: false,
   };
@@ -60,6 +63,22 @@ function isNullableNumber(value: unknown) {
   return value === null || typeof value === "number";
 }
 
+function isApiEquivalentCostBreakdown(
+  value: unknown,
+): value is ApiEquivalentCostBreakdown {
+  if (!isRecord(value) || typeof value.totalUsd !== "number") return false;
+  if (!isRecord(value.byProvider)) return false;
+  return Object.values(value.byProvider).every(
+    (amount) => typeof amount === "number" && Number.isFinite(amount),
+  );
+}
+
+export function isSubagentCostState(
+  value: unknown,
+): value is ApiEquivalentCostBreakdown {
+  return isApiEquivalentCostBreakdown(value);
+}
+
 export function isModelInfoState(value: unknown): value is ModelInfoState {
   if (!isRecord(value)) return false;
 
@@ -71,7 +90,7 @@ export function isModelInfoState(value: unknown): value is ModelInfoState {
     isNullableNumber(value.contextTokens) &&
     typeof value.contextWindow === "number" &&
     isNullableNumber(value.contextPercent) &&
-    typeof value.cost === "number" &&
+    isApiEquivalentCostBreakdown(value.apiEquivalentCost) &&
     isNullableNumber(value.tokensPerSecond) &&
     typeof value.generating === "boolean"
   );

@@ -12,13 +12,21 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import {
+  emptyApiEquivalentCostBreakdown,
+  formatApiEquivalentCostSummary,
+  mergeApiEquivalentCosts,
+  type ApiEquivalentCostBreakdown,
+} from "../shared/api-equivalent-cost.ts";
+import {
   emptyGitInfoState,
   emptyModelInfoState,
   GIT_INFO_CHANNEL,
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
+  SUBAGENT_COST_CHANNEL,
   isGitInfoState,
   isModelInfoState,
+  isSubagentCostState,
 } from "../shared/dashboard-state.ts";
 
 type Rgb = [number, number, number];
@@ -187,6 +195,8 @@ function columns(left: string, right: string, width: number) {
 export default function uiCustomization(pi: ExtensionAPI) {
   let title = "pi";
   let modelInfo = emptyModelInfoState();
+  let subagentApiEquivalentCost: ApiEquivalentCostBreakdown =
+    emptyApiEquivalentCostBreakdown();
   let gitInfo = emptyGitInfoState();
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
@@ -203,6 +213,15 @@ export default function uiCustomization(pi: ExtensionAPI) {
     gitInfo = value;
     requestRender?.();
   });
+
+  const stopSubagentCostListener = pi.events.on(
+    SUBAGENT_COST_CHANNEL,
+    (value) => {
+      if (!isSubagentCostState(value)) return;
+      subagentApiEquivalentCost = value;
+      requestRender?.();
+    },
+  );
 
   function scheduleThemeRemoval(tui: DashboardTui) {
     for (const timer of themeRemovalTimers) clearTimeout(timer);
@@ -272,7 +291,11 @@ export default function uiCustomization(pi: ExtensionAPI) {
             modelInfo.tokensPerSecond === null
               ? "— tok/s"
               : `${Math.round(modelInfo.tokensPerSecond)} tok/s`;
-          const usage = `${contextPercent}%/${contextWindow} · $${modelInfo.cost.toFixed(2)} · ${tps}`;
+          const totalApiEquivalentCost = mergeApiEquivalentCosts(
+            modelInfo.apiEquivalentCost,
+            subagentApiEquivalentCost,
+          );
+          const usage = `${contextPercent}%/${contextWindow} · ${formatApiEquivalentCostSummary(totalApiEquivalentCost)} · ${tps}`;
           const model = modelInfo.provider
             ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
             : modelInfo.modelId;
@@ -305,6 +328,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     title = formatDirectory(ctx.cwd);
     modelInfo = emptyModelInfoState();
+    subagentApiEquivalentCost = emptyApiEquivalentCostBreakdown();
     gitInfo = emptyGitInfoState();
     install(ctx);
   });
@@ -316,6 +340,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   pi.on("session_shutdown", (_event, ctx) => {
     stopModelListener();
     stopGitListener();
+    stopSubagentCostListener();
     for (const timer of themeRemovalTimers) clearTimeout(timer);
     themeRemovalTimers = [];
     activeTui = undefined;

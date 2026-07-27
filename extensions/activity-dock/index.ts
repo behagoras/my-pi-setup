@@ -39,6 +39,18 @@ const STATE_COLOR: Record<ActivityState, "warning" | "success" | "error"> = {
   failed: "error",
 };
 
+/** Fit long model labels while preserving a trailing dollar estimate. */
+export function fitActivityDetail(detail: string, maxWidth: number) {
+  if (maxWidth <= 0) return "";
+  if (visibleWidth(detail) <= maxWidth) return detail;
+  const cost = detail.match(/ · \$\d+\.\d{2}$/)?.[0];
+  if (!cost || visibleWidth(cost) >= maxWidth) {
+    return truncateToWidth(detail, maxWidth, "…");
+  }
+  const prefix = detail.slice(0, -cost.length);
+  return `${truncateToWidth(prefix, maxWidth - visibleWidth(cost), "…")}${cost}`;
+}
+
 function isActivityListEvent(value: unknown): value is ActivityListEvent {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<ActivityListEvent>;
@@ -73,18 +85,26 @@ export default function (pi: ExtensionAPI) {
       const marker = selected ? thm.fg("accent", "▸ ") : "  ";
       const dot = thm.fg(STATE_COLOR[activity.state], SQUARE);
       const source = thm.fg("muted", activity.source.padEnd(9));
-      const detail = activity.detail
-        ? thm.fg("dim", ` ${activity.detail}`)
-        : "";
-
       // The title absorbs whatever width the fixed columns leave.
       const fixed = visibleWidth(`  ${SQUARE} ${activity.source.padEnd(9)} `);
+      const detailBudget = Math.max(
+        0,
+        Math.min(Math.floor(width * 0.55), width - fixed - 4),
+      );
+      const plainDetail = activity.detail
+        ? fitActivityDetail(` ${activity.detail}`, detailBudget)
+        : "";
+      const detail = plainDetail ? thm.fg("dim", plainDetail) : "";
       const detailWidth = visibleWidth(detail);
-      const titleWidth = Math.max(8, width - fixed - detailWidth - 1);
+      const titleWidth = Math.max(1, width - fixed - detailWidth);
       const title = truncateToWidth(activity.title, titleWidth, "…");
       const titleText = selected ? thm.fg("accent", title) : title;
 
-      return `${marker}${dot} ${source} ${titleText}${detail}`;
+      return truncateToWidth(
+        `${marker}${dot} ${source} ${titleText}${detail}`,
+        width,
+        "…",
+      );
     };
 
     class ActivityDockEditor extends CustomEditor {

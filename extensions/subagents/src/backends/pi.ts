@@ -35,6 +35,10 @@ import type {
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
 import { createToolCallTimeoutGuard } from "../../../shared/tool-call-timeout.ts";
+import {
+  apiEquivalentCostUsd,
+  billingProviderName,
+} from "../../../shared/api-equivalent-cost.ts";
 
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 
@@ -353,12 +357,34 @@ const makePiSession = (
       };
     };
 
-    const emitUsage = () => {
+    const emitUsage = (message: AssistantMessage) => {
       const usage = session.getContextUsage();
+      const pricedModel =
+        registry.find(
+          message.provider,
+          message.responseModel ?? message.model,
+        ) ?? activeModel();
+      const storedCost = message.usage.cost.total;
+      const estimatedCost =
+        Number.isFinite(storedCost) && storedCost > 0
+          ? storedCost
+          : pricedModel
+            ? apiEquivalentCostUsd(pricedModel, message.usage)
+            : 0;
       emit({
         _tag: "UsageChanged",
         tokens: usage?.tokens ?? undefined,
         contextWindow: activeModel()?.contextWindow ?? usage?.contextWindow,
+        ...(estimatedCost > 0
+          ? {
+              apiEquivalentCost: {
+                provider: billingProviderName(message.provider),
+                modelLabel: `${message.provider}/${message.responseModel ?? message.model}`,
+                amountUsd: estimatedCost,
+                kind: "increment" as const,
+              },
+            }
+          : {}),
       });
     };
 
@@ -428,11 +454,12 @@ const makePiSession = (
             const text = userText(event.message as Message);
             if (text.trim()) emit({ _tag: "UserMessage", text });
           } else if (role === "assistant") {
+            const assistant = event.message as AssistantMessage;
             emit({
               _tag: "AssistantMessage",
-              parts: assistantParts(event.message as AssistantMessage),
+              parts: assistantParts(assistant),
             });
-            emitUsage();
+            emitUsage(assistant);
             emit({ _tag: "MetaChanged", meta: currentMeta() });
           }
           // toolResult messages are covered by tool_execution_end.

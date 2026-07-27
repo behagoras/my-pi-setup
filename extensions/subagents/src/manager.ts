@@ -24,6 +24,7 @@ import {
 import type { SubagentBackend, SubagentSession } from "./backend.ts";
 import { BackendRegistry } from "./backend.ts";
 import type {
+  ApiEquivalentCostUpdate,
   BackendName,
   LiveToolState,
   RunOutcome,
@@ -85,6 +86,10 @@ interface MutableSnapshot {
   errorText?: string;
   meta: SubagentMeta;
   usage: { tokens?: number; contextWindow?: number };
+  apiEquivalentCost: {
+    totalUsd: number;
+    byProvider: Record<string, number>;
+  };
   transcript: TranscriptItem[];
   liveAssistant?: { text: string; thinking: string };
   liveTools: LiveToolState[];
@@ -99,6 +104,8 @@ interface Entry {
   scope: Scope.Closeable;
   pump?: Fiber.Fiber<void>;
   liveToolMap: Map<string, LiveToolState>;
+  /** Last seen value for each monotonic backend cost counter. */
+  absoluteApiEquivalentCosts: Map<string, number>;
   /** Idle restart dispatched but RunStarted not folded yet; counts as running
    * so concurrent restarts cannot race past the cap. */
   restarting?: boolean;
@@ -111,6 +118,11 @@ export interface SubagentReadModel {
   list(): ReadonlyArray<SubagentSnapshot>;
   get(id: string): SubagentSnapshot | undefined;
   size(): number;
+  /** Session-lifetime totals, including subagents pruned from list(). */
+  getApiEquivalentCost(): {
+    readonly totalUsd: number;
+    readonly byProvider: Readonly<Record<string, number>>;
+  };
   /** Any-change notification (footer status, dashboard). */
   subscribe(listener: () => void): () => void;
   /** Per-subagent notification (takeover view). */
@@ -163,6 +175,8 @@ export interface SubagentManagerShape {
   send(id: string, text: string): Effect.Effect<void, SendError>;
   get(id: string): Effect.Effect<SubagentSnapshot | undefined>;
   readonly list: Effect.Effect<ReadonlyArray<SubagentSnapshot>>;
+  /** Start a new parent-session ledger without mutating live subagents. */
+  readonly resetApiEquivalentCost: Effect.Effect<void>;
   readonly disposeAll: Effect.Effect<void>;
   readonly view: SubagentReadModel;
 }
@@ -188,6 +202,7 @@ const makeManager = Effect.gen(function* () {
   let changeWaiters: Array<() => void> = [];
   const idListeners = new Map<string, Set<() => void>>();
   const cleanups = new Set<Fiber.Fiber<unknown>>();
+  const apiEquivalentCostByProvider = new Map<string, number>();
   let modelCounter = 0;
   let btwCounter = 0;
   let reserved = 0;
@@ -311,6 +326,33 @@ const makeManager = Effect.gen(function* () {
     pruneSettled();
   };
 
+  const foldApiEquivalentCost = (
+    entry: Entry,
+    update: ApiEquivalentCostUpdate,
+  ) => {
+    if (!Number.isFinite(update.amountUsd) || update.amountUsd < 0) return;
+    let increment = update.amountUsd;
+    if (update.kind === "absolute") {
+      const counterKey = update.counterKey ?? update.provider;
+      const previous = entry.absoluteApiEquivalentCosts.get(counterKey) ?? 0;
+      entry.absoluteApiEquivalentCosts.set(
+        counterKey,
+        Math.max(previous, update.amountUsd),
+      );
+      increment = Math.max(0, update.amountUsd - previous);
+    }
+    if (increment <= 0) return;
+
+    const snapshotCost = entry.snapshot.apiEquivalentCost;
+    snapshotCost.totalUsd += increment;
+    snapshotCost.byProvider[update.provider] =
+      (snapshotCost.byProvider[update.provider] ?? 0) + increment;
+    apiEquivalentCostByProvider.set(
+      update.provider,
+      (apiEquivalentCostByProvider.get(update.provider) ?? 0) + increment,
+    );
+  };
+
   const foldEvent = (entry: Entry, event: SubagentEvent) => {
     const s = entry.snapshot;
     switch (event._tag) {
@@ -408,6 +450,9 @@ const makeManager = Effect.gen(function* () {
           tokens: event.tokens ?? s.usage.tokens,
           contextWindow: event.contextWindow ?? s.usage.contextWindow,
         };
+        if (event.apiEquivalentCost) {
+          foldApiEquivalentCost(entry, event.apiEquivalentCost);
+        }
         break;
       case "MetaChanged":
         s.meta = { ...s.meta, ...event.meta };
@@ -481,6 +526,7 @@ const makeManager = Effect.gen(function* () {
             createdAt: Date.now(),
             meta,
             usage: { contextWindow: meta.contextWindow },
+            apiEquivalentCost: { totalUsd: 0, byProvider: {} },
             transcript: [],
             liveTools: [],
             queued: [],
@@ -490,6 +536,7 @@ const makeManager = Effect.gen(function* () {
           session,
           scope,
           liveToolMap: new Map(),
+          absoluteApiEquivalentCosts: new Map(),
         };
         entries.set(id, entry);
 
@@ -678,10 +725,25 @@ const makeManager = Effect.gen(function* () {
     yield* Effect.sync(() => notify());
   });
 
+  const resetApiEquivalentCost = Effect.sync(() => {
+    apiEquivalentCostByProvider.clear();
+    notify();
+  });
+
   const view: SubagentReadModel = {
     list: () => [...entries.values()].map((entry) => entry.snapshot),
     get: (id) => entries.get(id)?.snapshot,
     size: () => entries.size,
+    getApiEquivalentCost: () => {
+      const byProvider = Object.fromEntries(apiEquivalentCostByProvider);
+      return {
+        totalUsd: Object.values(byProvider).reduce(
+          (total, amount) => total + amount,
+          0,
+        ),
+        byProvider,
+      };
+    },
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -724,6 +786,7 @@ const makeManager = Effect.gen(function* () {
     send,
     get: (id) => Effect.sync(() => entries.get(id)?.snapshot),
     list: Effect.sync(() => [...entries.values()].map((e) => e.snapshot)),
+    resetApiEquivalentCost,
     disposeAll,
     view,
   });

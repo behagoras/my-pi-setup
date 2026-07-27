@@ -75,6 +75,20 @@ export interface SubagentMeta {
   readonly nativeSessionId?: string;
 }
 
+export interface ApiEquivalentCostUpdate {
+  /** Explicit billing identity; it is not always the same as the backend. */
+  readonly provider: string;
+  readonly modelLabel?: string;
+  readonly amountUsd: number;
+  /**
+   * Increment prices one request. Absolute is a monotonic backend/session
+   * counter and is delta-folded by the manager to reject duplicate updates.
+   */
+  readonly kind: "increment" | "absolute";
+  /** Stable namespace for independent absolute counters within one subagent. */
+  readonly counterKey?: string;
+}
+
 // --- Transcript ------------------------------------------------------------
 
 export type TranscriptPart =
@@ -176,8 +190,10 @@ export type SubagentEvent =
     }
   | {
       readonly _tag: "UsageChanged";
+      /** Current context occupancy, deliberately separate from billing usage. */
       readonly tokens?: number;
       readonly contextWindow?: number;
+      readonly apiEquivalentCost?: ApiEquivalentCostUpdate;
     }
   | { readonly _tag: "MetaChanged"; readonly meta: Partial<SubagentMeta> }
   /** Non-fatal diagnostics. Fatal failures arrive as a RunSettled outcome. */
@@ -202,6 +218,10 @@ export interface SubagentSnapshot {
   readonly errorText?: string;
   readonly meta: SubagentMeta;
   readonly usage: { readonly tokens?: number; readonly contextWindow?: number };
+  readonly apiEquivalentCost: {
+    readonly totalUsd: number;
+    readonly byProvider: Readonly<Record<string, number>>;
+  };
   readonly transcript: ReadonlyArray<TranscriptItem>;
   /** Streaming assistant buffers, cleared when the finalized message lands. */
   readonly liveAssistant?: { readonly text: string; readonly thinking: string };
