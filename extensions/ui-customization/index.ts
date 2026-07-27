@@ -50,23 +50,22 @@ const TITLE_LINES = [
   "  ██║      ██║ ",
   "  ╚═╝      ╚═╝ ",
 ];
+/* eslint-disable no-control-regex */
 const ANSI_PATTERN =
-  /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
-// eslint-disable-next-line no-control-regex
+  new RegExp("[\\x1B\\x9B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\\x07)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]))", "g");
 const OSC_PATTERN =
-  /(?:\u001b\]|\u009d)(?:[^\u0007\u001b\u009c]|\u001b(?!\\))*(?:\u0007|\u001b\\|\u009c)/g;
-// eslint-disable-next-line no-control-regex
-const CSI_PATTERN = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g;
-// eslint-disable-next-line no-control-regex
-const ESCAPE_PATTERN = /\u001b(?:[()][0-2A-Z]|[ -/]*[@-~])/g;
+  new RegExp("(?:\\x1b\\]|\\x9d)(?:[^\\x07\\x1b\\x9c]|\\x1b(?!\\\\))*(?:\\x07|\\x1b\\\\|\\x9c)", "g");
+const CSI_PATTERN = new RegExp("(?:\\x1b\\[|\\x9b)[0-?]*[ -/]*[@-~]", "g");
+const ESCAPE_PATTERN = new RegExp("\\x1b(?:[()][0-2A-Z]|[ -/]*[@-~])", "g");
 
 function sanitizeTerminalLabel(text: string) {
   return text
     .replace(OSC_PATTERN, "")
     .replace(CSI_PATTERN, "")
     .replace(ESCAPE_PATTERN, "")
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+    .replace(new RegExp("[\\x00-\\x1f\\x7f-\\x9f]", "g"), "");
 }
+/* eslint-enable no-control-regex */
 
 function mix(a: number, b: number, amount: number) {
   return Math.round(a + (b - a) * amount);
@@ -278,8 +277,8 @@ export default function uiCustomization(pi: ExtensionAPI) {
             : modelInfo.modelId;
 
           const lines = [
-            columns(directory, theme.fg("muted", model), width),
-            columns(theme.fg("muted", usage), theme.fg("muted", git), width),
+            truncateToWidth(columns(directory, theme.fg("muted", model), width), width),
+            truncateToWidth(columns(theme.fg("muted", usage), theme.fg("muted", git), width), width),
           ];
 
           // Extension statuses render after the two dashboard lines, one per row.
